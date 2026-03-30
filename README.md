@@ -25,13 +25,19 @@ claude mcp add vision-mcp-server-pro --scope user \
   -- uvx vision-mcp-server-pro
 ```
 
-### Environment Variables
+## Environment Variables
+
+使用前，需要设置以下环境变量：
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MODELSCOPE_TOKEN` | Yes | Your ModelScope API token |
-| `MODELSCOPE_MODEL` | No | Primary model (defaults to first in fallback list) |
-| `MODELSCOPE_FALLBACK_MODELS` | No | Comma-separated fallback model list (overrides defaults) |
+| `MODELSCOPE_TOKEN` | Yes | 魔搭社区的 API 密钥 |
+| `MODELSCOPE_MODEL` | No | 首选模型（默认使用回落列表中的第一个） |
+| `MODELSCOPE_FALLBACK_MODELS` | No | 自定义回落模型列表，逗号分隔（覆盖默认列表） |
+
+### 获取 MODELSCOPE_TOKEN
+
+访问 [魔搭社区](https://modelscope.cn/) → 个人中心 → API令牌
 
 ### Specify Primary Model
 
