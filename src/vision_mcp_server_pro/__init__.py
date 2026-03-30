@@ -1,17 +1,24 @@
 import os
 import sys
 import base64
+import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+# 按视觉能力从高到低排序：VL专用大模型 > VL中型 > VL小型 > 通用大模型 > 通用中型
 DEFAULT_MODELS = [
-    "Qwen/Qwen3.5-397B-A17B",
-    "Qwen/Qwen3-VL-235B-A22B-Instruct",
-    "moonshotai/Kimi-K2.5",
-    "Qwen/Qwen3.5-122B-A10B",
+    "Qwen/Qwen3-VL-235B-A22B-Instruct",      # 235B VL旗舰
+    "Shanghai_AI_Laboratory/Intern-S1-Pro",    # 多模态科学推理
+    "Qwen/Qwen3-VL-30B-A3B-Instruct",         # 30B VL
+    "Qwen/Qwen3-VL-8B-Thinking",              # 8B VL+推理
+    "Qwen/Qwen3-VL-8B-Instruct",              # 8B VL基础
+    "Qwen/Qwen3.5-122B-A10B",                 # 122B 通用
+    "Qwen/Qwen3.5-35B-A3B",                   # 35B 通用
+    "Qwen/Qwen3.5-27B",                       # 27B 通用
 ]
 
 MODELSCOPE_TOKEN = os.environ.get("MODELSCOPE_TOKEN", "")
@@ -21,6 +28,8 @@ FALLBACK_MODELS_ENV = os.environ.get("MODELSCOPE_FALLBACK_MODELS", "")
 if not MODELSCOPE_TOKEN:
     print("Error: MODELSCOPE_TOKEN environment variable is not set.", file=sys.stderr)
     sys.exit(1)
+
+CST = timezone(timedelta(hours=8))
 
 
 def get_model_list() -> list[str]:
@@ -35,7 +44,44 @@ def get_model_list() -> list[str]:
 
 MODELS = get_model_list()
 
+# 当日额度耗尽的模型黑名单: {model_id: expire_timestamp}
+_exhausted_models: dict[str, float] = {}
+
 mcp = FastMCP("vision-mcp-server-pro")
+
+
+def _quota_reset_ts() -> float:
+    """返回额度重置时间戳（次日凌晨3点北京时间）
+    如果当前时间已过凌晨3点，返回明天凌晨3点；否则返回今天凌晨3点。
+    边界情况：23:50耗尽额度 -> 次日3:00重置，而非当天3:00。
+    """
+    now_cst = datetime.now(CST)
+    target = now_cst.replace(hour=3, minute=0, second=0, microsecond=0)
+    if target <= now_cst:
+        # 已过今天3点，重置时间在明天3点
+        from datetime import timedelta as _td
+        target += _td(days=1)
+    return target.timestamp()
+
+
+def _cleanup_expired() -> None:
+    """清除已过期的黑名单条目"""
+    now = time.time()
+    expired = [k for k, v in _exhausted_models.items() if v <= now]
+    for k in expired:
+        del _exhausted_models[k]
+
+
+def mark_exhausted(model: str) -> None:
+    """将模型标记为今日额度耗尽"""
+    _exhausted_models[model] = _quota_reset_ts()
+    print(f"[vision-mcp-server-pro] Model {model} quota exhausted, blacklisted until end of day", file=sys.stderr)
+
+
+def is_exhausted(model: str) -> bool:
+    """检查模型是否在今日黑名单中"""
+    _cleanup_expired()
+    return model in _exhausted_models
 
 
 def is_url(source: str) -> bool:
@@ -93,6 +139,12 @@ def call_modelscope_api(model: str, image_url: str, prompt: str) -> str:
 
     with httpx.Client(timeout=120) as client:
         resp = client.post(url, headers=headers, json=payload)
+
+        # 429 = 限额耗尽，标记为当日黑名单
+        if resp.status_code == 429:
+            mark_exhausted(model)
+            raise Exception(f"Rate limit exceeded (429) for {model}")
+
         resp.raise_for_status()
         data = resp.json()
 
@@ -112,8 +164,13 @@ def analyze_image(image: str, prompt: str = "请描述这张图片的内容") ->
     """
     image_url = resolve_image(image)
     errors: list[str] = []
+    skipped: list[str] = []
 
     for model in MODELS:
+        # 跳过今日已耗尽额度的模型
+        if is_exhausted(model):
+            skipped.append(model)
+            continue
         try:
             result = call_modelscope_api(model, image_url, prompt)
             if model != MODELS[0]:
@@ -125,7 +182,12 @@ def analyze_image(image: str, prompt: str = "请描述这张图片的内容") ->
             errors.append(f"{model}: {msg}")
             continue
 
-    return f"All models failed:\n" + "\n".join(errors)
+    parts = []
+    if skipped:
+        parts.append(f"Skipped (quota exhausted today): {', '.join(skipped)}")
+    if errors:
+        parts.append("Errors:\n" + "\n".join(errors))
+    return "All models failed.\n" + "\n".join(parts)
 
 
 def main():
