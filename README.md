@@ -15,21 +15,14 @@ MCP server for vision capabilities with **automatic model fallback** via ModelSc
 3. `moonshotai/Kimi-K2.5`
 4. `Qwen/Qwen3.5-122B-A10B`
 
-## Installation
+## Usage
 
-```bash
-npm install -g vision-mcp-server-pro
-```
-
-## Configuration
-
-Add to your MCP client (e.g., Claude Code):
+Add to your MCP client (e.g., Claude Code) using **uvx** (no global install needed):
 
 ```bash
 claude mcp add vision-mcp-server-pro --scope user \
   -e MODELSCOPE_TOKEN=your_token_here \
-  -e MODELSCOPE_MODEL=Qwen/Qwen3.5-397B-A17B \
-  -- vision-mcp-server-pro
+  -- uvx vision-mcp-server-pro
 ```
 
 ### Environment Variables
@@ -40,13 +33,25 @@ claude mcp add vision-mcp-server-pro --scope user \
 | `MODELSCOPE_MODEL` | No | Primary model (defaults to first in fallback list) |
 | `MODELSCOPE_FALLBACK_MODELS` | No | Comma-separated fallback model list (overrides defaults) |
 
+### Specify Primary Model
+
+```bash
+claude mcp add vision-mcp-server-pro --scope user \
+  -e MODELSCOPE_TOKEN=your_token_here \
+  -e MODELSCOPE_MODEL=Qwen/Qwen3-VL-235B-A22B-Instruct \
+  -- uvx vision-mcp-server-pro
+```
+
 ### Custom Fallback Models
 
 ```bash
--e MODELSCOPE_FALLBACK_MODELS="ModelA,ModelB,ModelC"
+claude mcp add vision-mcp-server-pro --scope user \
+  -e MODELSCOPE_TOKEN=your_token_here \
+  -e MODELSCOPE_FALLBACK_MODELS="Qwen/Qwen3.5-397B-A17B,Qwen/Qwen3-VL-235B-A22B-Instruct" \
+  -- uvx vision-mcp-server-pro
 ```
 
-## Usage
+## Tool
 
 The server provides an `analyze_image` tool:
 

@@ -1,4 +1,8 @@
-node_modules/
+__pycache__/
+*.pyc
+*.egg-info/
 dist/
-*.tgz
+build/
+*.egg
 .DS_Store
+.venv/
