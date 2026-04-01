@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from PIL import Image
+import io
 
 # 按视觉能力从高到低排序：VL专用大模型 > VL中型 > VL小型 > 通用大模型 > 通用中型
 DEFAULT_MODELS = [
@@ -92,6 +94,45 @@ def is_url(source: str) -> bool:
         return False
 
 
+MAX_BASE64_SIZE = 4 * 1024 * 1024  # 4MB base64 limit (ModelScope 5MB with margin)
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"}
+
+
+def _compress_image(data: bytes) -> tuple[bytes, str]:
+    """Compress image until base64-encoded size <= MAX_BASE64_SIZE.
+    Returns (compressed_bytes, mime_type).
+    """
+    img = Image.open(io.BytesIO(data))
+    if img.mode in ("RGBA", "P", "LA"):
+        img = img.convert("RGB")
+
+    orig_w, orig_h = img.size
+    print(f"[vision-mcp-server-pro] Image compression: original size {orig_w}x{orig_h}, "
+          f"file {len(data)} bytes, base64 ~{len(base64.b64encode(data))} bytes", file=sys.stderr)
+
+    scale = 1.0
+    quality = 85
+    while True:
+        buf = io.BytesIO()
+        new_w = int(orig_w * scale)
+        new_h = int(orig_h * scale)
+        resized = img.resize((new_w, new_h), Image.LANCZOS)
+        resized.save(buf, format="JPEG", quality=quality)
+        compressed = buf.getvalue()
+        b64_size = len(base64.b64encode(compressed))
+        print(f"[vision-mcp-server-pro] Compressed to {new_w}x{new_h} (scale={scale:.2f}), "
+              f"file {len(compressed)} bytes, base64 ~{b64_size} bytes", file=sys.stderr)
+        if b64_size <= MAX_BASE64_SIZE:
+            break
+        scale *= 0.75
+        if scale < 0.05:
+            # Safety: don't shrink below 5% of original
+            break
+
+    return compressed, "image/jpeg"
+
+
 def encode_image_to_base64(image_path: str) -> str:
     path = Path(image_path)
     if not path.exists():
@@ -107,6 +148,13 @@ def encode_image_to_base64(image_path: str) -> str:
     }
     mime_type = mime_map.get(ext, "image/jpeg")
     data = path.read_bytes()
+
+    # Auto-compress if base64 would exceed limit
+    if ext in IMAGE_EXTENSIONS:
+        estimated_b64 = len(data) * 4 // 3  # base64 ~1.33x
+        if estimated_b64 > MAX_BASE64_SIZE:
+            data, mime_type = _compress_image(data)
+
     b64 = base64.b64encode(data).decode("utf-8")
     return f"data:{mime_type};base64,{b64}"
 
