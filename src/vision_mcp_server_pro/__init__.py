@@ -95,12 +95,13 @@ def is_url(source: str) -> bool:
 
 
 MAX_BASE64_SIZE = 4 * 1024 * 1024  # 4MB base64 limit (ModelScope 5MB with margin)
+MAX_RESOLUTION = 2048  # ModelScope API max dimension
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"}
 
 
 def _compress_image(data: bytes) -> tuple[bytes, str]:
-    """Compress image until base64-encoded size <= MAX_BASE64_SIZE.
+    """Compress image: first ensure resolution within MAX_RESOLUTION, then size within MAX_BASE64_SIZE.
     Returns (compressed_bytes, mime_type).
     """
     img = Image.open(io.BytesIO(data))
@@ -109,8 +110,19 @@ def _compress_image(data: bytes) -> tuple[bytes, str]:
 
     orig_w, orig_h = img.size
     print(f"[vision-mcp-server-pro] Image compression: original size {orig_w}x{orig_h}, "
-          f"file {len(data)} bytes, base64 ~{len(base64.b64encode(data))} bytes", file=sys.stderr)
+          f"file {len(data)} bytes", file=sys.stderr)
 
+    # Step 1: Resolution check - scale down if width or height exceeds MAX_RESOLUTION
+    if orig_w > MAX_RESOLUTION or orig_h > MAX_RESOLUTION:
+        ratio = min(MAX_RESOLUTION / orig_w, MAX_RESOLUTION / orig_h)
+        new_w = int(orig_w * ratio)
+        new_h = int(orig_h * ratio)
+        print(f"[vision-mcp-server-pro] Resolution {orig_w}x{orig_h} exceeds {MAX_RESOLUTION}, "
+              f"scaling to {new_w}x{new_h}", file=sys.stderr)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        orig_w, orig_h = new_w, new_h
+
+    # Step 2: File size compression loop
     scale = 1.0
     quality = 85
     while True:
@@ -127,7 +139,6 @@ def _compress_image(data: bytes) -> tuple[bytes, str]:
             break
         scale *= 0.75
         if scale < 0.05:
-            # Safety: don't shrink below 5% of original
             break
 
     return compressed, "image/jpeg"
@@ -149,10 +160,23 @@ def encode_image_to_base64(image_path: str) -> str:
     mime_type = mime_map.get(ext, "image/jpeg")
     data = path.read_bytes()
 
-    # Auto-compress if base64 would exceed limit
+    # Auto-compress if resolution exceeds limit OR base64 would exceed size limit
     if ext in IMAGE_EXTENSIONS:
-        estimated_b64 = len(data) * 4 // 3  # base64 ~1.33x
+        needs_compress = False
+        # Check resolution
+        try:
+            with Image.open(io.BytesIO(data)) as probe:
+                w, h = probe.size
+                if w > MAX_RESOLUTION or h > MAX_RESOLUTION:
+                    print(f"[vision-mcp-server-pro] Resolution check: {w}x{h} exceeds {MAX_RESOLUTION}", file=sys.stderr)
+                    needs_compress = True
+        except Exception:
+            pass
+        # Check size
+        estimated_b64 = len(data) * 4 // 3
         if estimated_b64 > MAX_BASE64_SIZE:
+            needs_compress = True
+        if needs_compress:
             data, mime_type = _compress_image(data)
 
     b64 = base64.b64encode(data).decode("utf-8")
