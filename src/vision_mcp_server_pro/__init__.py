@@ -188,12 +188,18 @@ def call_modelscope_api(model: str, image_url: str, prompt: str) -> str:
     with httpx.Client(timeout=120) as client:
         resp = client.post(url, headers=headers, json=payload)
 
+        if resp.status_code != 200:
+            body = resp.text[:500]
+            print(f"[vision-mcp-server-pro] API error {resp.status_code} from {model}: {body}", file=sys.stderr)
+
         # 429 = 限额耗尽，标记为当日黑名单
         if resp.status_code == 429:
             mark_exhausted(model)
             raise Exception(f"Rate limit exceeded (429) for {model}")
 
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise Exception(f"HTTP {resp.status_code} from {model}: {body}")
+
         data = resp.json()
 
     content = data.get("choices", [{}])[0].get("message", {}).get("content")
